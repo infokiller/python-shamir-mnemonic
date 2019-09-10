@@ -261,7 +261,19 @@ def _get_salt(identifier):
     )
 
 
-def _encrypt(master_secret, passphrase, iteration_exponent, identifier):
+def encrypt(identifier, iteration_exponent, master_secret, passphrase):
+    if len(master_secret) * 8 < MIN_STRENGTH_BITS:
+        raise ValueError(
+            "The length of the master secret ({} bytes) must be at least {} bytes.".format(
+                len(master_secret), bits_to_bytes(MIN_STRENGTH_BITS)
+            )
+        )
+
+    if len(master_secret) % 2 != 0:
+        raise ValueError(
+            "The length of the master secret in bytes must be an even number."
+        )
+
     l = master_secret[: len(master_secret) // 2]
     r = master_secret[len(master_secret) // 2 :]
     salt = _get_salt(identifier)
@@ -271,7 +283,7 @@ def _encrypt(master_secret, passphrase, iteration_exponent, identifier):
     return r + l
 
 
-def _decrypt(encrypted_master_secret, passphrase, iteration_exponent, identifier):
+def decrypt(identifier, iteration_exponent, encrypted_master_secret, passphrase):
     l = encrypted_master_secret[: len(encrypted_master_secret) // 2]
     r = encrypted_master_secret[len(encrypted_master_secret) // 2 :]
     salt = _get_salt(identifier)
@@ -515,18 +527,18 @@ def _generate_random_identifier():
     return identifier & ((1 << ID_LENGTH_BITS) - 1)
 
 
-def generate_mnemonics(
-    group_threshold, groups, master_secret, passphrase=b"", iteration_exponent=0
+def generate_mnemonics_from_data(
+    encrypted_master_secret, identifier, group_threshold, groups, iteration_exponent=0
 ):
     """
-    Splits a master secret into mnemonic shares using Shamir's secret sharing scheme.
+    Splits the encrypted master secret into mnemonic shares using Shamir's secret sharing scheme.
     :param int group_threshold: The number of groups required to reconstruct the master secret.
     :param groups: A list of (member_threshold, member_count) pairs for each group, where member_count
         is the number of shares to generate for the group and member_threshold is the number of members required to
         reconstruct the group secret.
     :type groups: List of pairs of integers.
-    :param master_secret: The master secret to split.
-    :type master_secret: Array of bytes.
+    :param encrypted_master_secret: The encrypted master secret to split.
+    :type encrypted_master_secret: Array of bytes.
     :param passphrase: The passphrase used to encrypt the master secret.
     :type passphrase: Array of bytes.
     :param int iteration_exponent: The iteration exponent.
@@ -534,23 +546,16 @@ def generate_mnemonics(
     :rtype: List of byte arrays.
     """
 
-    identifier = _generate_random_identifier()
-
-    if len(master_secret) * 8 < MIN_STRENGTH_BITS:
+    if len(encrypted_master_secret) * 8 < MIN_STRENGTH_BITS:
         raise ValueError(
             "The length of the master secret ({} bytes) must be at least {} bytes.".format(
-                len(master_secret), bits_to_bytes(MIN_STRENGTH_BITS)
+                len(encrypted_master_secret), bits_to_bytes(MIN_STRENGTH_BITS)
             )
         )
 
-    if len(master_secret) % 2 != 0:
+    if len(encrypted_master_secret) % 2 != 0:
         raise ValueError(
             "The length of the master secret in bytes must be an even number."
-        )
-
-    if not all(32 <= c <= 126 for c in passphrase):
-        raise ValueError(
-            "The passphrase must contain only printable ASCII characters (code points 32-126)."
         )
 
     if group_threshold > len(groups):
@@ -567,10 +572,6 @@ def generate_mnemonics(
         raise ValueError(
             "Creating multiple member shares with member threshold 1 is not allowed. Use 1-of-1 member sharing instead."
         )
-
-    encrypted_master_secret = _encrypt(
-        master_secret, passphrase, iteration_exponent, identifier
-    )
 
     group_shares = _split_secret(group_threshold, len(groups), encrypted_master_secret)
 
@@ -594,6 +595,25 @@ def generate_mnemonics(
             groups, group_shares
         )
     ]
+
+
+def generate_mnemonics(
+    group_threshold, groups, master_secret, passphrase=b"", iteration_exponent=0
+):
+    identifier = _generate_random_identifier()
+
+    if not all(32 <= c <= 126 for c in passphrase):
+        raise ValueError(
+            "The passphrase must contain only printable ASCII characters (code points 32-126)."
+        )
+
+    encrypted_master_secret = encrypt(
+        identifier, iteration_exponent, master_secret, passphrase
+    )
+
+    return generate_mnemonics_from_data(
+        encrypted_master_secret, identifier, group_threshold, groups, iteration_exponent
+    )
 
 
 def generate_mnemonics_random(
@@ -638,16 +658,18 @@ def generate_mnemonics_random(
     )
 
 
-def combine_mnemonics(mnemonics, passphrase=b""):
+def combine_mnemonics(mnemonics):
     """
-    Combines mnemonic shares to obtain the master secret which was previously split using
-    Shamir's secret sharing scheme.
+    Combines mnemonic shares to obtain the encrypted master secret which was previously
+    split using Shamir's secret sharing scheme.
+
+    Afterwards, the encrypted master secret must be decoded using `decrypt` with the
+    appropriate passphrase.
+
     :param mnemonics: List of mnemonics.
     :type mnemonics: List of byte arrays.
-    :param passphrase: The passphrase used to encrypt the master secret.
-    :type passphrase: Array of bytes.
-    :return: The master secret.
-    :rtype: Array of bytes.
+    :return: Identifier, iteration exponent, encrypted master secret.
+    :rtype: Tuple of: int, int, byte array.
     """
 
     if not mnemonics:
@@ -691,9 +713,22 @@ def combine_mnemonics(mnemonics, passphrase=b""):
         for group_index, group in groups.items()
     ]
 
-    return _decrypt(
-        _recover_secret(group_threshold, group_shares),
-        passphrase,
-        iteration_exponent,
-        identifier,
-    )
+    encrypted_master_secret = _recover_secret(group_threshold, group_shares)
+
+    return identifier, iteration_exponent, encrypted_master_secret
+
+
+def recover_mnemonics(mnemonics, passphrase=b""):
+    """
+    Combines mnemonic shares and decrypts the resulting master secret with the provided
+    passphrase.
+
+    :param mnemonics: List of mnemonics.
+    :type mnemonics: List of byte arrays.
+    :param passphrase: The passphrase used to encrypt the master secret.
+    :type passphrase: Array of bytes.
+    :return: The master secret.
+    :rtype: Array of bytes.
+    """
+    mnemonic_data = combine_mnemonics(mnemonics)
+    return decrypt(*mnemonic_data, passphrase)

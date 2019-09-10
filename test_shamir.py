@@ -12,33 +12,33 @@ MS = b"ABCDEFGHIJKLMNOP"
 
 def test_basic_sharing_random():
     mnemonics = shamir.generate_mnemonics_random(1, [(3, 5)])[0]
-    assert shamir.combine_mnemonics(mnemonics[:3]) == shamir.combine_mnemonics(
+    assert shamir.recover_mnemonics(mnemonics[:3]) == shamir.recover_mnemonics(
         mnemonics[2:]
     )
 
 
 def test_basic_sharing_fixed():
     mnemonics = shamir.generate_mnemonics(1, [(3, 5)], MS)[0]
-    assert MS == shamir.combine_mnemonics(mnemonics[:3])
-    assert MS == shamir.combine_mnemonics(mnemonics[1:4])
+    assert MS == shamir.recover_mnemonics(mnemonics[:3])
+    assert MS == shamir.recover_mnemonics(mnemonics[1:4])
     with pytest.raises(MnemonicError):
-        shamir.combine_mnemonics(mnemonics[1:3])
+        shamir.recover_mnemonics(mnemonics[1:3])
 
 
 def test_passphrase():
     mnemonics = shamir.generate_mnemonics(1, [(3, 5)], MS, b"TREZOR")[0]
-    assert MS == shamir.combine_mnemonics(mnemonics[1:4], b"TREZOR")
-    assert MS != shamir.combine_mnemonics(mnemonics[1:4])
+    assert MS == shamir.recover_mnemonics(mnemonics[1:4], b"TREZOR")
+    assert MS != shamir.recover_mnemonics(mnemonics[1:4])
 
 
 def test_iteration_exponent():
     mnemonics = shamir.generate_mnemonics(1, [(3, 5)], MS, b"TREZOR", 1)[0]
-    assert MS == shamir.combine_mnemonics(mnemonics[1:4], b"TREZOR")
-    assert MS != shamir.combine_mnemonics(mnemonics[1:4])
+    assert MS == shamir.recover_mnemonics(mnemonics[1:4], b"TREZOR")
+    assert MS != shamir.recover_mnemonics(mnemonics[1:4])
 
     mnemonics = shamir.generate_mnemonics(1, [(3, 5)], MS, b"TREZOR", 2)[0]
-    assert MS == shamir.combine_mnemonics(mnemonics[1:4], b"TREZOR")
-    assert MS != shamir.combine_mnemonics(mnemonics[1:4])
+    assert MS == shamir.recover_mnemonics(mnemonics[1:4], b"TREZOR")
+    assert MS != shamir.recover_mnemonics(mnemonics[1:4])
 
 
 def test_group_sharing():
@@ -55,23 +55,23 @@ def test_group_sharing():
             for group2_subset in combinations(groups[1][0], groups[1][1]):
                 mnemonic_subset = list(group1_subset + group2_subset)
                 shuffle(mnemonic_subset)
-                assert MS == shamir.combine_mnemonics(mnemonic_subset)
+                assert MS == shamir.recover_mnemonics(mnemonic_subset)
 
     # Minimal sets of mnemonics.
-    assert MS == shamir.combine_mnemonics(
+    assert MS == shamir.recover_mnemonics(
         [mnemonics[2][0], mnemonics[2][2], mnemonics[3][0]]
     )
-    assert MS == shamir.combine_mnemonics(
+    assert MS == shamir.recover_mnemonics(
         [mnemonics[2][3], mnemonics[3][0], mnemonics[2][4]]
     )
 
     # One complete group and one incomplete group out of two groups required.
     with pytest.raises(MnemonicError):
-        shamir.combine_mnemonics(mnemonics[0][2:] + [mnemonics[1][0]])
+        shamir.recover_mnemonics(mnemonics[0][2:] + [mnemonics[1][0]])
 
     # One group of two required.
     with pytest.raises(MnemonicError):
-        shamir.combine_mnemonics(mnemonics[0][1:4])
+        shamir.recover_mnemonics(mnemonics[0][1:4])
 
 
 def test_group_sharing_threshold_1():
@@ -87,7 +87,7 @@ def test_group_sharing_threshold_1():
         for group_subset in combinations(group, threshold):
             mnemonic_subset = list(group_subset)
             shuffle(mnemonic_subset)
-            assert MS == shamir.combine_mnemonics(mnemonic_subset)
+            assert MS == shamir.recover_mnemonics(mnemonic_subset)
 
 
 def test_all_groups_exist():
@@ -134,12 +134,12 @@ def test_vectors():
         vectors = json.load(f)
     for description, mnemonics, secret in vectors:
         if secret:
-            assert bytes.fromhex(secret) == shamir.combine_mnemonics(
+            assert bytes.fromhex(secret) == shamir.recover_mnemonics(
                 mnemonics, b"TREZOR"
             ), 'Incorrect secret for test vector "{}".'.format(description)
         else:
             with pytest.raises(MnemonicError):
-                shamir.combine_mnemonics(mnemonics)
+                shamir.recover_mnemonics(mnemonics)
                 pytest.fail(
                     'Failed to raise exception for test vector "{}".'.format(
                         description

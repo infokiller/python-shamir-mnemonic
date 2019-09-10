@@ -5,8 +5,15 @@ from collections import defaultdict, namedtuple
 import click
 from click import style
 
-from . import (MnemonicError, combine_mnemonics, decode_mnemonic,
-               generate_mnemonics, group_prefix, mnemonic_from_indices)
+from . import (
+    MnemonicError,
+    combine_mnemonics,
+    decode_mnemonic,
+    generate_mnemonics,
+    group_prefix,
+    mnemonic_from_indices,
+    recover_mnemonics,
+)
 
 
 @click.group()
@@ -41,9 +48,9 @@ def cli():
 @click.option("-p", "--passphrase", help="Supply passphrase for recovery.")
 def create(scheme, groups, threshold, exponent, master_secret, passphrase, strength):
     """Create a Shamir mnemonic set
-    
+
     SCHEME can be one of:
-    
+
     \b
     single: Create a single recovery seed.
     2of3: Create 3 shares. Require 2 of them to recover the seed.
@@ -58,7 +65,7 @@ def create(scheme, groups, threshold, exponent, master_secret, passphrase, stren
             "Only use passphrase in conjunction with an explicit master secret"
         )
 
-    if (groups or threshold != None) and scheme != "custom":
+    if (groups or threshold is not None) and scheme != "custom":
         raise click.BadArgumentUsage(f"To use -g/-t, you must select 'custom' scheme.")
 
     if scheme == "single":
@@ -162,15 +169,15 @@ def recover(passphrase_prompt):
 
     def print_group_status(idx):
         group = groups[idx]
-        group_prefix = style(make_group_prefix(idx), bold=True)
+        prefix_str = style(make_group_prefix(idx), bold=True)
         bi = style(str(len(group)), bold=True)
         if not group:
-            click.echo(f"{EMPTY} {bi} shares from group {group_prefix}")
+            click.echo(f"{EMPTY} {bi} shares from group {prefix_str}")
         else:
             elem = next(iter(group))
             prefix = FINISHED if len(group) >= elem.threshold else INPROGRESS
             bt = style(str(elem.threshold), bold=True)
-            click.echo(f"{prefix} {bi} of {bt} shares needed from group {group_prefix}")
+            click.echo(f"{prefix} {bi} of {bt} shares needed from group {prefix_str}")
 
     def group_is_complete(idx):
         group = groups[idx]
@@ -217,7 +224,7 @@ def recover(passphrase_prompt):
     try:
         all_data = set.union(*groups.values())
         all_mnemonics = [m.str for m in all_data]
-        master_secret = combine_mnemonics(all_mnemonics)
+        combine_mnemonics(all_mnemonics)
     except MnemonicError as e:
         error(str(e))
         click.echo("Recovery failed")
@@ -234,7 +241,7 @@ def recover(passphrase_prompt):
                 break
             except UnicodeDecodeError:
                 click.echo("Passphrase must be ASCII. Please try again.")
-        master_secret = combine_mnemonics(all_mnemonics, passphrase_bytes)
+        master_secret = recover_mnemonics(all_mnemonics, passphrase_bytes)
 
     click.echo(f"Your master secret is: {master_secret.hex()}")
 
