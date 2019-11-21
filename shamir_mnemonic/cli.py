@@ -1,6 +1,7 @@
-import os
+import secrets
 import sys
 from collections import defaultdict, namedtuple
+from typing import List, Tuple
 
 import click
 from click import style
@@ -21,50 +22,25 @@ def cli():
     pass
 
 
-@cli.command()
-@click.argument("scheme")
-@click.option(
-    "-g",
-    "--group",
-    "groups",
-    type=(int, int),
-    metavar="T N",
-    multiple=True,
-    help="Add a T-of-N group to the custom scheme.",
-)
-@click.option(
-    "-t",
-    "--threshold",
-    type=int,
-    help="Number of groups required for recovery in the custom scheme.",
-)
-@click.option("-E", "--exponent", type=int, default=0, help="Iteration exponent.")
-@click.option(
-    "-s", "--strength", type=int, default=128, help="Secret strength in bits."
-)
-@click.option(
-    "-S", "--master-secret", help="Hex-encoded custom master secret.", metavar="HEX"
-)
-@click.option("-p", "--passphrase", help="Supply passphrase for recovery.")
-def create(scheme, groups, threshold, exponent, master_secret, passphrase, strength):
-    """Create a Shamir mnemonic set
+def get_secret_bytes(master_secret: str, prompt_for_master_secret: bool,
+                      strength: int) -> str:
+    if master_secret is not None:
+        try:
+            return bytes.fromhex(master_secret)
+        except ValueError as e:
+            raise click.BadOptionUsage(
+                "master_secret", "Secret bytes must be hex encoded") from e
+    if prompt_for_master_secret:
+        while True:
+            try:
+                master_secret = click.prompt("Enter master secret")
+                return bytes.fromhex(master_secret)
+            except ValueError as e:
+                click.echo("Master secret must be an hex string. Please try again.")
+    return secrets.token_bytes(strength // 8)
 
-    SCHEME can be one of:
 
-    \b
-    single: Create a single recovery seed.
-    2of3: Create 3 shares. Require 2 of them to recover the seed.
-          (You can use any number up to 16. Try 3of5, 4of4, 1of7...)
-    master: Create 1 master share that can recover the seed by itself,
-            plus a 3-of-5 group: 5 shares, with 3 required for recovery.
-            Keep the master for yourself, give the 5 shares to trusted friends.
-    custom: Specify configuration with -t and -g options.
-    """
-    if passphrase and not master_secret:
-        raise click.ClickException(
-            "Only use passphrase in conjunction with an explicit master secret"
-        )
-
+def get_scheme(scheme: str, groups: List[Tuple[int, int]], threshold: int):
     if (groups or threshold is not None) and scheme != "custom":
         raise click.BadArgumentUsage(f"To use -g/-t, you must select 'custom' scheme.")
 
@@ -92,32 +68,98 @@ def create(scheme, groups, threshold, exponent, master_secret, passphrase, stren
             )
     else:
         raise click.ClickException(f"Unknown scheme: {scheme}")
+    return groups, threshold
+
+
+def get_passphrase_from_user() -> bytes:
+    while True:
+        passphrase = click.prompt(
+            "Enter passphrase", hide_input=True, confirmation_prompt=True
+        )
+        try:
+            passphrase_bytes = passphrase.encode("ascii")
+            return passphrase_bytes
+        except UnicodeDecodeError:
+            click.echo("Passphrase must be ASCII. Please try again.")
+
+
+@cli.command()
+@click.argument("scheme")
+@click.option(
+    "-g",
+    "--group",
+    "groups",
+    type=(int, int),
+    metavar="T N",
+    multiple=True,
+    help="Add a T-of-N group to the custom scheme.",
+)
+@click.option(
+    "-t",
+    "--threshold",
+    type=int,
+    help="Number of groups required for recovery in the custom scheme.",
+)
+@click.option("-E", "--exponent", type=int, default=0, help="Iteration exponent.")
+@click.option(
+    "-s", "--strength", type=int, default=128, help="Secret strength in bits."
+)
+@click.option(
+    "-S", "--master-secret", help="Hex-encoded custom master secret.", metavar="HEX"
+)
+@click.option(
+    "--prompt-for-master-secret", is_flag=True, help="Prompt for master secret interactively"
+)
+@click.option("-p", "--passphrase", help="Supply passphrase for recovery.")
+@click.option("--passphrase-prompt", is_flag=True, help="Supply passphrase for recovery interactively.")
+def create(scheme, groups, threshold, exponent, master_secret,
+           prompt_for_master_secret, passphrase, passphrase_prompt,
+           strength):
+    """Create a Shamir mnemonic set
+
+    SCHEME can be one of:
+
+    \b
+    single: Create a single recovery seed.
+    2of3: Create 3 shares. Require 2 of them to recover the seed.
+          (You can use any number up to 16. Try 3of5, 4of4, 1of7...)
+    master: Create 1 master share that can recover the seed by itself,
+            plus a 3-of-5 group: 5 shares, with 3 required for recovery.
+            Keep the master for yourself, give the 5 shares to trusted friends.
+    custom: Specify configuration with -t and -g options.
+    """
+    if master_secret and prompt_for_master_secret:
+        raise click.BadOptionUsage(
+            "prompt_for_master_secret",
+            "master_secret and prompt_for_master_secret are mutually exclusive")
+    if passphrase and passphrase_prompt:
+        raise click.BadOptionUsage(
+            "passphrase_prompt",
+            "passphrase and passphrase_prompt are mutually exclusive")
+    if (passphrase or passphrase_prompt) and not (master_secret or prompt_for_master_secret):
+        raise click.ClickException(
+            "Only use passphrase in conjunction with an explicit master secret"
+        )
+
+    groups, threshold = get_scheme(scheme, groups, threshold)
 
     if any(m == 1 and n > 1 for m, n in groups):
         click.echo("1-of-X groups are not allowed.")
         click.echo("Instead, set up a 1-of-1 group and give everyone the same share.")
         sys.exit(1)
 
-    if master_secret is not None:
-        try:
-            secret_bytes = bytes.fromhex(master_secret)
-        except Exception as e:
-            raise click.BadOptionUsage(
-                "master_secret", f"Secret bytes must be hex encoded"
-            ) from e
-    else:
-        secret_bytes = os.urandom(strength // 8)
-
+    secret_bytes = get_secret_bytes(master_secret, prompt_for_master_secret, strength)
     secret_hex = style(secret_bytes.hex(), bold=True)
     click.echo(f"Using master secret: {secret_hex}")
 
-    if passphrase:
+    passphrase_bytes = b""
+    if get_passphrase_from_user:
+        passphrase_bytes = get_passphrase_from_user()
+    elif passphrase:
         try:
             passphrase_bytes = passphrase.encode("ascii")
         except UnicodeDecodeError:
             raise click.ClickException("Passphrase must be ASCII only")
-    else:
-        passphrase_bytes = b""
 
     mnemonics = generate_mnemonics(
         threshold, groups, secret_bytes, passphrase_bytes, exponent
@@ -231,17 +273,10 @@ def recover(passphrase_prompt):
         sys.exit(1)
 
     click.secho("SUCCESS!", fg="green", bold=True)
+    passphrase_bytes = b''
     if passphrase_prompt:
-        while True:
-            passphrase = click.prompt(
-                "Enter passphrase", hide_input=True, confirmation_prompt=True
-            )
-            try:
-                passphrase_bytes = passphrase.encode("ascii")
-                break
-            except UnicodeDecodeError:
-                click.echo("Passphrase must be ASCII. Please try again.")
-        master_secret = recover_mnemonics(all_mnemonics, passphrase_bytes)
+        passphrase_bytes = get_passphrase_from_user()
+    master_secret = recover_mnemonics(all_mnemonics, passphrase_bytes)
 
     click.echo(f"Your master secret is: {master_secret.hex()}")
 
